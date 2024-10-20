@@ -3,25 +3,19 @@ import time
 import json
 from typing import List, Dict
 import re
-import chromadb
-from chromadb.config import Settings
-
-# client = chromadb.Client()
+import tiktoken
 
 class MasterAgent:
-    def __init__(self, model_id='llama-3.1-70b-versatile', api_key: str = ''):
+    def __init__(self, model_id='gemma2-9b-it', api_key: str = ''):
         self.model_id = model_id
         self.client = groq.Client(api_key=api_key)
         self.agents = []
         self.project_memory = ""
-        self.chroma_client = chromadb.PersistentClient(settings=Settings(allow_reset=True, anonymized_telemetry=False))
-        unique_id = int(time.time())
-        self.memory_collection = self.chroma_client.create_collection(f"project_memory_{unique_id}")
-        self.iteration_count = 0
-        self.use_chroma = True
-        self.memory_list = []
+        self.original_task = ""
+        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
     def determine_roles(self, task: str) -> List[Dict[str, str]]:
+        self.original_task = task
         prompt = f"""Given the following task: "{task}"
         Determine the necessary team roles to accomplish this task effectively. For each role:
         1. Provide a role title (e.g., 'UI Designer', 'Backend Developer')
@@ -29,13 +23,13 @@ class MasterAgent:
         3. Briefly describe the role's primary responsibility
         
         Return the information as a JSON array of objects, each with 'role', 'name', and 'responsibility' keys.
-        Limit the team to smaller members (2-3) for efficiency or medium (4-5), depending on the prompt and availability of options."""
+        Limit the team to 3-5 members for efficiency."""
 
         response = self.client.chat.completions.create(
             messages=[{'role': 'user', 'content': prompt}],
             model=self.model_id,
             temperature=0.7,
-            max_tokens=8000
+            max_tokens=self.get_max_tokens(prompt)
         )
 
         roles_text = response.choices[0].message.content
@@ -68,14 +62,20 @@ class MasterAgent:
         responses = []
         for agent in self.agents:
             try:
-                response = agent.submit_response()
+                response = agent.submit_response(self.original_task)
                 responses.append(response)
             except Exception as e:
                 print(f"Error collecting response from {agent.name} ({agent.role}): {str(e)}")
         return responses
 
+    def facilitate_discussions(self):
+        for agent in self.agents:
+            try:
+                agent.discuss_with_peers(self.agents, self.project_memory, self.original_task)
+            except Exception as e:
+                print(f"Error in discussion for {agent.name} ({agent.role}): {str(e)}")
+
     def update_project_memory(self):
-        self.iteration_count += 1
         all_responses = [f"{agent.name} ({agent.role}): {agent.get_latest_response()}" for agent in self.agents]
         memory_update_prompt = f"""Based on the following agent responses, provide a concise summary of the key points and decisions made in this iteration. Focus on new information and important developments:
 
@@ -84,84 +84,71 @@ class MasterAgent:
         Current Project Memory:
         {self.project_memory}
 
+        Original Task:
+        {self.original_task}
+
         Updated Project Memory:"""
 
         response = self.client.chat.completions.create(
             messages=[{'role': 'user', 'content': memory_update_prompt}],
             model=self.model_id,
             temperature=0.7,
-            max_tokens=8000
+            max_tokens=self.get_max_tokens(memory_update_prompt)
         )
-        updated_memory = response.choices[0].message.content
-
-        # Store the updated memory in ChromaDB
-        self.memory_collection.add(
-            documents=[updated_memory],
-            metadatas=[{"iteration": self.iteration_count}],
-            ids=[f"memory_{self.iteration_count}"]
-        )
-
-        if self.use_chroma:
-            try:
-                self.memory_collection.add(
-                    documents=[updated_memory],
-                    metadatas=[{"iteration": self.iteration_count}],
-                    ids=[f"memory_{self.iteration_count}"]
-                )
-            except Exception as e:
-                print(f"Error adding to ChromaDB: {e}")
-                print("Falling back to in-memory storage.")
-                self.use_chroma = False
-                self.memory_list = self.memory_list[-4:] + [updated_memory]  # Keep last 5 memories
-        else:
-            self.memory_list = self.memory_list[-4:] + [updated_memory]  # Keep last 5 memories
-
-        self.project_memory = updated_memory
-
-    def get_relevant_memories(self, query: str, n_results: int = 5) -> str:
-        if self.use_chroma:
-            try:
-                results = self.memory_collection.query(
-                    query_texts=[query],
-                    n_results=min(n_results, self.iteration_count)
-                )
-                return " ".join(results['documents'][0])
-            except Exception as e:
-                print(f"Error querying ChromaDB: {e}")
-                print("Falling back to in-memory storage.")
-                self.use_chroma = False
-                return " ".join(self.memory_list[-n_results:])
-        else:
-            return " ".join(self.memory_list[-n_results:])
-    
-    def facilitate_discussions(self):
-        for agent in self.agents:
-            try:
-                relevant_memories = self.get_relevant_memories(agent.get_latest_response())
-                agent.discuss_with_peers(self.agents, self.project_memory, relevant_memories)
-            except Exception as e:
-                print(f"Error in discussion for {agent.name} ({agent.role}): {str(e)}")
+        self.project_memory = response.choices[0].message.content
 
     def synthesize_final_output(self) -> str:
         all_responses = [f"{agent.name} ({agent.role}): {agent.get_latest_response()}" for agent in self.agents]
-        relevant_memories = self.get_relevant_memories(" ".join(all_responses))
-        synthesis_prompt = f"""Synthesize the following responses into a coherent final output. Incorporate key information from the project memory and relevant past memories to ensure a comprehensive and detailed result:
+        synthesis_prompt = f"""Synthesize the following responses into a coherent final output. Incorporate key information from the project memory to ensure a comprehensive and detailed result:
 
         Agent Responses:
         {chr(10).join(all_responses)}
 
-        Current Project Memory:
+        Project Memory:
         {self.project_memory}
 
-        Relevant Past Memories:
-        {relevant_memories}
+        Original Task:
+        {self.original_task}
 
-        Provide a detailed and concise final output that captures all important aspects of the project:"""
+        Provide a detailed and comprehensive final output that captures all important aspects of the project:"""
+        
+        final_output = ""
+        while len(self.tokenizer.encode(final_output)) < 2000:  # Adjust this limit as needed
+            response = self.client.chat.completions.create(
+                messages=[
+                    {'role': 'user', 'content': synthesis_prompt},
+                    {'role': 'assistant', 'content': final_output}
+                ],
+                model=self.model_id,
+                temperature=0.7,
+                max_tokens=self.get_max_tokens(synthesis_prompt + final_output)
+            )
+            new_content = response.choices[0].message.content
+            if new_content.strip() == "":
+                break
+            final_output += new_content
+        
+        return final_output
+
+    def get_max_tokens(self, prompt: str) -> int:
+        prompt_tokens = len(self.tokenizer.encode(prompt))
+        return min(8192 - prompt_tokens, 4096)  # Adjust these values based on your model's limits
+
+    def compress_text(self, text: str, max_tokens: int) -> str:
+        if len(self.tokenizer.encode(text)) <= max_tokens:
+            return text
+        
+        compression_prompt = f"""Compress the following text to fit within {max_tokens} tokens while retaining the most important information:
+
+        {text}
+
+        Compressed version:"""
+        
         response = self.client.chat.completions.create(
-            messages=[{'role': 'user', 'content': synthesis_prompt}],
+            messages=[{'role': 'user', 'content': compression_prompt}],
             model=self.model_id,
             temperature=0.7,
-            max_tokens=8000
+            max_tokens=max_tokens
         )
         return response.choices[0].message.content
 
@@ -175,13 +162,16 @@ class SubordinateAgent:
         self.messages = []
         self.last_request_time = 0
         self.personal_memory = ""
+        self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
 
     def receive_task(self, task: str):
         role_specific_prompt = f"As {self.name}, the {self.role} responsible for {self.responsibility}, respond to the following task: {task}"
         self.messages.append({'role': 'user', 'content': role_specific_prompt})
 
-    def submit_response(self) -> str:
-        response_prompt = f"""Based on your role as {self.role} responsible for {self.responsibility}, provide your response to the task. 
+    def submit_response(self, original_task: str) -> str:
+        response_prompt = f"""Original Task: {original_task}
+
+        Based on your role as {self.role} responsible for {self.responsibility}, provide your response to the task. 
         Include any relevant information from your personal memory:
 
         Personal Memory:
@@ -192,21 +182,20 @@ class SubordinateAgent:
         self.update_personal_memory(response)
         return response
 
-    def discuss_with_peers(self, agent_list: List['SubordinateAgent'], project_memory: str, relevant_memories: str):
+    def discuss_with_peers(self, agent_list: List['SubordinateAgent'], project_memory: str, original_task: str):
         peer_ideas = [
             f"{peer.name} ({peer.role}): {peer.get_latest_response()}"
             for peer in agent_list if peer != self
         ]
-        discussion_prompt = f"""Consider these ideas from your peers, the project memory, and relevant past memories:
+        discussion_prompt = f"""Original Task: {original_task}
+
+        Consider these ideas from your peers and the project memory:
 
         Peer Ideas:
         {chr(10).join(peer_ideas)}
 
-        Current Project Memory:
+        Project Memory:
         {project_memory}
-
-        Relevant Past Memories:
-        {relevant_memories}
 
         Your Personal Memory:
         {self.personal_memory}
@@ -235,46 +224,48 @@ class SubordinateAgent:
     def get_latest_response(self) -> str:
         return self.messages[-1]['content'] if self.messages else ""
 
-    def send_request(self, message: Dict[str, str], temperature: float = 0.7, max_tokens: int = 8000) -> str:
+    def send_request(self, message: Dict[str, str], temperature: float = 0.7, max_tokens: int = 150) -> str:
         self._rate_limit()
         try:
-            full_response = ""
-            continuation_prompt = ""
-            while True:
-                chat_completion = self.client.chat.completions.create(
-                    messages=self.messages + [{'role': 'user', 'content': message['content'] + continuation_prompt}],
-                    model=self.model_id,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-                response = chat_completion.choices[0].message.content
-                full_response += response
-
-                # Check if the response is complete
-                if self._is_response_complete(response):
-                    break
-
-                # Prepare continuation prompt
-                continuation_prompt = f"\n\nPlease continue from where you left off. The previous part was:\n{response}"
-
-            self.messages.append({'role': 'assistant', 'content': full_response})
-            return full_response
+            prompt = message['content']
+            max_tokens = min(self.get_max_tokens(prompt), max_tokens)
+            chat_completion = self.client.chat.completions.create(
+                messages=self.messages + [message],
+                model=self.model_id,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            response = chat_completion.choices[0].message.content
+            self.messages.append({'role': 'assistant', 'content': response})
+            return response
         except Exception as e:
             print(f"Error in API request for {self.name} ({self.role}): {str(e)}")
             return f"Error: Unable to generate response for {self.name} ({self.role})"
-        
-    def _is_response_complete(self, response: str) -> bool:
-        # Check if the response ends with a complete sentence or code block
-        if response.endswith('.') or response.endswith('!') or response.endswith('?'):
-            return True
-        if response.endswith('}') or response.endswith(']') or response.endswith(')'):
-            return True
-        if '```' in response and response.count('```') % 2 == 0:
-            return True
-        return False
 
     def _rate_limit(self):
         current_time = time.time()
         if current_time - self.last_request_time < 0.1:  # 1 second delay between requests
             time.sleep(1 - (current_time - self.last_request_time))
         self.last_request_time = time.time()
+
+    def get_max_tokens(self, prompt: str) -> int:
+        prompt_tokens = len(self.tokenizer.encode(prompt))
+        return min(8192 - prompt_tokens, 4096)  # Adjust these values based on your model's limits
+
+    def compress_text(self, text: str, max_tokens: int) -> str:
+        if len(self.tokenizer.encode(text)) <= max_tokens:
+            return text
+        
+        compression_prompt = f"""Compress the following text to fit within {max_tokens} tokens while retaining the most important information:
+
+        {text}
+
+        Compressed version:"""
+        
+        response = self.client.chat.completions.create(
+            messages=[{'role': 'user', 'content': compression_prompt}],
+            model=self.model_id,
+            temperature=0.7,
+            max_tokens=max_tokens
+        )
+        return response.choices[0].message.content
