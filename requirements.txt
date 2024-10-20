@@ -1,2 +1,5 @@
 groq
 chromadb
+streamlit
+tiktoken
+audio-recorder-streamlit
