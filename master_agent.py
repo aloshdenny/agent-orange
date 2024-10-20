@@ -6,7 +6,7 @@ import re
 import tiktoken
 
 class MasterAgent:
-    def __init__(self, model_id='gemma2-9b-it', api_key: str = ''):
+    def __init__(self, model_id='llama3-groq-8b-8192-tool-use-preview', api_key: str = ''):
         self.model_id = model_id
         self.client = groq.Client(api_key=api_key)
         self.agents = []
@@ -21,7 +21,7 @@ class MasterAgent:
         1. Provide a role title (e.g., 'UI Designer', 'Backend Developer')
         2. Assign a unique name to the agent filling this role (e.g., 'Alex', 'Sam')
         3. Briefly describe the role's primary responsibility
-        
+        4. If the role is more roleplaying, like playing as a team, or a family, you are liable to change the above rules. Although do give them names.
         Return the information as a JSON array of objects, each with 'role', 'name', and 'responsibility' keys.
         Limit the team to 3-5 members for efficiency."""
 
