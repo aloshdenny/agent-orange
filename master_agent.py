@@ -6,7 +6,7 @@ import re
 import tiktoken
 
 class MasterAgent:
-    def __init__(self, model_id='llama3-groq-8b-8192-tool-use-preview', api_key: str = ''):
+    def __init__(self, model_id='llama3-70b-8192', api_key: str = ''):
         self.model_id = model_id
         self.client = groq.Client(api_key=api_key)
         self.agents = []

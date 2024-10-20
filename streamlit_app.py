@@ -1,6 +1,9 @@
 import streamlit as st
 import time
-from master_agent import MasterAgent  # We'll create this file later
+from master_agent import MasterAgent
+import groq
+import tempfile
+import os
 
 # Streamlit page configuration
 st.set_page_config(page_title="Agentic AI Writer", layout="wide")
@@ -9,8 +12,46 @@ st.set_page_config(page_title="Agentic AI Writer", layout="wide")
 st.title("Agent 🍊")
 st.write("This application uses multiple AI agents of 🍊 to speed up workflows.")
 
+# Initialize Groq client for Whisper API
+groq_client = groq.Client(api_key='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')  # Replace with your actual Groq API key
+
+# Function to transcribe audio using Groq's Whisper API
+def transcribe_audio(audio_file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+        tmp_file.write(audio_file.getvalue())
+        tmp_file_path = tmp_file.name
+
+    try:
+        with open(tmp_file_path, 'rb') as audio:
+            response = groq_client.audio.transcriptions.create(
+                model="whisper-large-v3-turbo",
+                file=audio,
+                response_format="text"
+            )
+        return response
+    finally:
+        os.unlink(tmp_file_path)
+
 # User inputs
-prompt = st.text_area("Enter your writing prompt:", "give the code for transformers")
+st.subheader("Input Options")
+input_method = st.radio("Choose input method:", ("Text", "Voice"))
+
+if input_method == "Text":
+    prompt = st.text_area("Enter your writing prompt:", "give the code for transformers")
+else:
+    st.write("Note: Streamlit doesn't have a built-in audio recorder. Please use a separate recording tool and upload the audio file.")
+    uploaded_file = st.file_uploader("Upload your audio file", type=['wav', 'mp3', 'm4a'])
+    
+    if uploaded_file is not None:
+        st.audio(uploaded_file)
+        if st.button("Transcribe Audio"):
+            with st.spinner("Transcribing audio..."):
+                transcription = transcribe_audio(uploaded_file)
+                prompt = transcription
+                st.text_area("Transcribed Text:", value=prompt, height=150)
+    else:
+        prompt = ""
+
 num_iterations = st.number_input("Number of iterations:", min_value=1, max_value=10, value=5)
 
 # Initialize session state
@@ -20,14 +61,14 @@ if 'master_agent' not in st.session_state:
     st.session_state.output = ""
 
 # Start button
-if st.button("Start Writing"):
+if st.button("Start Writing") and prompt:
     # Initialize MasterAgent
     api_keys = [
         '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',
         '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',
         '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'
     ]
-    st.session_state.master_agent = MasterAgent(model_id='llama3-groq-8b-8192-tool-use-preview', api_key=api_keys[0])
+    st.session_state.master_agent = MasterAgent(model_id='llama3-70b-8192', api_key=api_keys[0])
     
     # Determine roles
     with st.spinner("Determining roles..."):
@@ -75,4 +116,4 @@ if st.button("Start Writing"):
 # Display final output
 if st.session_state.output:
     st.subheader("Final Output:")
-    st.write(st.session_state.output)   
+    st.write(st.session_state.output)
