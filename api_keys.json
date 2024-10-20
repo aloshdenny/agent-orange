@@ -1,0 +1,12 @@
+{
+    "groq_api_keys": [
+        "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",
+        "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",
+        "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",
+        "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",
+        "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",
+        "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",
+        "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"
+    ],
+    "whisper_api_key": "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"
+}
