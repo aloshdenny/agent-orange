@@ -27,7 +27,7 @@ if st.button("Start Writing"):
         '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',
         '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'
     ]
-    st.session_state.master_agent = MasterAgent(model_id='gemma2-9b-it', api_key=api_keys[0])
+    st.session_state.master_agent = MasterAgent(model_id='llama3-8b-8192', api_key=api_keys[0])
     
     # Determine roles
     with st.spinner("Determining roles..."):
