@@ -11,7 +11,7 @@ st.set_page_config(page_title="Agentic AI Writer", layout="wide")
 
 # Title and description
 st.title("Agent 🍊")
-st.write("This application uses multiple AI agents of 🍊 to speed up workflows.")
+st.write("This application uses multiple AI agents of 🍊 to digest, discuss and reason prompts carefully. Built with 💓 from Emelin.")
 
 # Load API keys from JSON file
 def load_api_keys():
