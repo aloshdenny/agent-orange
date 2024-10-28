@@ -1,5 +1,8 @@
+streamlit
+streamlit-chromadb-connection
+langchain
+pypdf
+tiktoken
 groq
 chromadb
-streamlit
-tiktoken
-audio-recorder-streamlit
+openai
